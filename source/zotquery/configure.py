@@ -27,12 +27,13 @@ def config_freshen(arg):
     """
     if arg == 'True':
         zq.backend.update_clone()
-        zq.backend.update_json()
+        zq.backend.update_cache()
         return 0
     update, spot = zq.backend.is_fresh()
     if update:
         if spot == 'Clone':
             zq.backend.update_clone()
-        elif spot == 'JSON':
-            zq.backend.update_json()
+            zq.backend.update_cache()
+        elif spot == 'Cache':
+            zq.backend.update_cache()
     return 0

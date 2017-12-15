@@ -259,11 +259,11 @@ def search_for_items(scope, query):
     # Run sqlite query and get back item keys
     item_keys = run_item_sqlite_query(sqlite_query)
     # Get JSON data of user's Zotero library
-    data = utils.read_json(zq.backend.json_data)
+    cache = zq.backend.cache
 
     results = []
     for key in item_keys:
-        item = data.get(key, None)
+        item = cache.get(key, None)
         if item:
             # Prepare dictionary for Alfred
             formatter = ResultsFormatter(item)
@@ -282,7 +282,7 @@ def make_item_sqlite_query(scope, query):
 
 ### 1.1.1  --------------------------------------------------------------------
 def make_item_fuzzy(query):
-    return ''.join([query, '*'])
+    return query + '*'
 
 
 ### 1.1.2  --------------------------------------------------------------------
@@ -296,8 +296,7 @@ def get_item_columns(scope):
 ### 1.1.3  --------------------------------------------------------------------
 def make_disjunctive_item_query(query, columns):
     # Format `column:query`
-    bits = ['{}:{}'.format(col, query)
-            for col in columns]
+    bits = ['{}:{}'.format(col, query) for col in columns]
     # Make a disjunctive query
     return ' OR '.join(bits)
 
@@ -411,6 +410,7 @@ def run_group_sqlite_query(query):
 
 # 3.  -------------------------------------------------------------------------
 def search_within_group(scope, query):
+    config.log.debug('scope=%r, query=%r', scope, query)
     group_type = scope.split('-')[-1]
     # Read saved group info
     path = config.WF.cachefile('{}_query_result.txt'.format(group_type))
@@ -421,16 +421,16 @@ def search_within_group(scope, query):
     # Run sqlite query and get back item keys
     item_keys = run_item_sqlite_query(sqlite_query)
     # Get JSON data of user's Zotero library
-    data = utils.read_json(zq.backend.json_data)
-    results_dict = []
+    cache = zq.backend.cache
+    results = []
     for key in item_keys:
-        item = data.get(key, None)
+        item = cache.get(key, None)
         if item:
             # Prepare dictionary for Alfred
             formatter = ResultsFormatter(item)
             alfred_dict = formatter.prepare_item_feedback()
-            results_dict.append(alfred_dict)
-    return results_dict
+            results.append(alfred_dict)
+    return results
 
 
 ## 3.1  -----------------------------------------------------------------------

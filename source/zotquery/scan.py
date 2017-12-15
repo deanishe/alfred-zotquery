@@ -41,7 +41,7 @@ def reference_scan(md_text):
     Adapted from <https://github.com/smathot/academicmarkdown>
 
     """
-    data = utils.read_json(zq.backend.json_data)
+    data = zq.backend.cache
     keys = data.keys()
     ref_count = 1
     zot_items = []

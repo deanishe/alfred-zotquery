@@ -77,9 +77,8 @@ def open_attachment(arg):
         subprocess.check_output(['open', arg])
     # if self.input is item key
     else:
-        data = utils.read_json(zq.backend.json_data)
         item_id = arg.split('_')[-1]
-        item = data.get(item_id, None)
+        item = zq.backend.cache.get(item_id, None)
         if item:
             for att in item['attachments']:
                 if os.path.exists(att['path']):

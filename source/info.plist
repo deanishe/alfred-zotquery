@@ -1641,7 +1641,7 @@
 				<key>escaping</key>
 				<integer>102</integer>
 				<key>script</key>
-				<string>/usr/bin/python zotquery.py config freshen True</string>
+				<string>/usr/bin/python zotquery.py configure freshen True</string>
 				<key>scriptargtype</key>
 				<integer>1</integer>
 				<key>scriptfile</key>

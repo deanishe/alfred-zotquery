@@ -7,20 +7,21 @@
 #
 from __future__ import unicode_literals
 
-# Standard Library
+from collections import OrderedDict
+from contextlib import closing
 import os
 import re
-import struct
-import sqlite3
-import os.path
-from time import time
 from shutil import copyfile
-from collections import OrderedDict
+import sqlite3
+import struct
+from time import time
+
 
 # Internal Dependencies
-from zotquery import config
 from lib import pashua, utils
 from zotero import zot
+from zotquery import config
+from zotquery.cache import Cache
 from zotquery.config import PropertyBase, stored_property
 
 # Alfred-Workflow
@@ -66,18 +67,42 @@ class ZotqueryBackend(PropertyBase):
 
         # Paths to workflow data files
         self._clone_path = wf.datafile('zotero.sqlite3')
-        self._json_path = wf.datafile('zotquery.json')
+        self._cache_path = wf.datafile('entries-cache.sqlite3')
+        # self._json_path = wf.datafile('zotquery.json')
         self._fts_path = wf.datafile('search.sqlite3')
         self._fts_ascii_path = wf.datafile('search-ascii.sqlite3')
 
+        self._cache = None
         # initialize :class:`LocalZotero`
         self.zotero = zot(self.wf)
         # initialize base class, for access to `properties` dict
         PropertyBase.__init__(self, self.wf, secured=False)
-        self.con = None
+        self._con = None
 
 
     # Properties --------------------------------------------------------------
+
+    @property
+    def con(self):
+        """Connection to clone database."""
+        if not self._con:
+            self._con = sqlite3.connect(self.cloned_sqlite)
+
+        return self._con
+
+    @property
+    def cache(self):
+        """SQLite-based cache of Zotero items."""
+        if not self._cache:
+            populate = not os.path.exists(self._cache_path)
+            self._cache = Cache(self._cache_path)
+            if populate:
+                with closing(sqlite3.connect(self.cloned_sqlite)) as con:
+                    for k, v in self.get_all_items().items():
+                        self._cache.set(k, v)
+
+        return self._cache
+
 
     @property
     def cloned_sqlite(self):
@@ -92,20 +117,6 @@ class ZotqueryBackend(PropertyBase):
             log.info('Created clone SQLite database')
 
         return self._clone_path
-
-    @property
-    def json_data(self):
-        """Return path to ZotQuery's JSON version of user's Zotero database.
-
-        :returns: full path to file
-        :rtype: :class:`unicode`
-
-        """
-        if not os.path.exists(self._json_path):
-            self.con = sqlite3.connect(self.cloned_sqlite)
-            # Function to generate ZotQuery's JSON database
-            self.to_json()
-        return self._json_path
 
     @property
     def fts_sqlite(self):
@@ -208,15 +219,15 @@ class ZotqueryBackend(PropertyBase):
         update, spot = False, None
         zotero_mod = os.stat(self.zotero.original_sqlite).st_mtime
         clone_mod = os.stat(self.cloned_sqlite).st_mtime
-        cache_mod = os.stat(self.json_data).st_mtime
+        cache_mod = self.cache.updated
 
         # Check if cloned sqlite database is up-to-date with `zotero` database
         if zotero_mod > clone_mod:
             update, spot = True, "Clone"
 
-        # Check if JSON cache is up-to-date with the cloned database
+        # Check if cache is up-to-date with the cloned database
         elif (cache_mod - clone_mod) > 10:
-            update, spot = True, "JSON"
+            update, spot = True, "Cache"
 
         if update:
             log.debug('Update %s? %s', spot, update)
@@ -230,19 +241,15 @@ class ZotqueryBackend(PropertyBase):
         copyfile(self.zotero.original_sqlite, self._clone_path)
         log.info('Updated clone SQLite file')
 
-    def update_json(self):
-        """Update `json_data` so that it's current with `cloned_sqlite`.
+    def update_cache(self):
+        """Update cache of Zotero items."""
+        if os.path.exists(self._cache_path):
+            os.rename(self._cache_path, self._cache_path + '.backup')
 
-        """
-        self.con = sqlite3.connect(self.cloned_sqlite)
-
-        # backup previous version of library
-        if os.path.exists(self.json_data):
-            copyfile(self.json_data, self.wf.datafile('backup.json'))
-
-        # update library
-        self.to_json()
-        log.info('Updated and backed-up JSON file')
+        # Rebuild cache
+        self._cache = None
+        self.cache
+        log.info('Updated item cache')
 
     ## JSON to FTS sub-methods ------------------------------------------------
 
@@ -254,18 +261,17 @@ class ZotqueryBackend(PropertyBase):
         :type db: :class:`unicode`
 
         """
-        con = sqlite3.connect(db)
-        with con:
-            cur = con.cursor()
-            # get search columns from `general` scope
-            columns = config.FILTERS.get('general', None)
-            if columns:
-                # convert list to string
-                columns = ', '.join(columns)
-                sql = """CREATE VIRTUAL TABLE zotquery
-                         USING fts3({cols})""".format(cols=columns)
-                cur.execute(sql)
-                log.debug('Created FTS database: {}'.format(db))
+        with closing(sqlite3.connect(db)) as con:
+            with con as cur:
+                # get search columns from `general` scope
+                columns = config.FILTERS.get('general', None)
+                if columns:
+                    # convert list to string
+                    columns = ', '.join(columns)
+                    sql = """CREATE VIRTUAL TABLE zotquery
+                             USING fts3({cols})""".format(cols=columns)
+                    cur.execute(sql)
+                    log.debug('Created FTS database: {}'.format(db))
 
     def update_index_db(self, fts_path, folded=False):
         """Update ``fts_sqlite`` with JSON data from ``json_data``.
@@ -280,25 +286,25 @@ class ZotqueryBackend(PropertyBase):
         """
         # grab start time
         start = time()
-        con = sqlite3.connect(fts_path)
         count = 0
-        with con:
-            cur = con.cursor()
-            # iterate over every item in library
-            for d in self.generate_data():
-                # names of all keys for item (cf. `FILTERS['general']`)
-                columns = ', '.join(d.keys())
-                values = d.values()
-                # values = ', '.join(values)
-                # fold to ASCII-only?
-                if folded:
-                    values = [fold(s) for s in values]
-                sql = """INSERT OR IGNORE INTO zotquery
-                         ({columns}) VALUES ({data})
-                        """.format(columns=columns,
-                                   data=','.join(['?'] * len(values)))
-                cur.execute(sql, values)
-                count += 1
+        with closing(sqlite3.connect(fts_path)) as con:
+            with con as cur:
+                # iterate over every item in library
+                for d in self.generate_data():
+                    # names of all keys for item (cf. `FILTERS['general']`)
+                    columns = ', '.join(d.keys())
+                    values = d.values()
+                    # fold to ASCII-only?
+                    if folded:
+                        values = [fold(s) for s in values]
+
+                    sql = """INSERT OR IGNORE INTO zotquery
+                             ({columns}) VALUES ({data})
+                            """.format(columns=columns,
+                                       data=','.join(['?'] * len(values)))
+                    cur.execute(sql, values)
+                    count += 1
+
         log.debug('Added/Updated %d items in %0.3fs', count, time() - start)
 
     def generate_data(self):
@@ -309,9 +315,11 @@ class ZotqueryBackend(PropertyBase):
         :rtype: :class:`genererator`
 
         """
-        json_data = utils.read_json(self.json_data)
+        # json_data = utils.read_json(self.json_data)
+        # for item in json_data.itervalues():
+
         # for each `item`, get its data in dict format
-        for item in json_data.itervalues():
+        for item in self.cache.values():
             array = []
             # get search columns from scope
             columns = config.FILTERS.get('general', None)
@@ -323,7 +331,7 @@ class ZotqueryBackend(PropertyBase):
                     if json_map:
                         # get data from `item` using search map
                         data[column] = self.get_datum(item, json_map)
-                        # array.append((column, ))
+
                 yield data
 
     @staticmethod
@@ -395,11 +403,8 @@ class ZotqueryBackend(PropertyBase):
 
     ## SQLITE to JSON sub-methods ---------------------------------------------
 
-    # TODO: Create a JSON db class to house all this code
-    def to_json(self):
-        """Convert Zotero's sqlite database to structured JSON.
-
-        This file is a dictionary wherein each item's Zotero key
+    def get_all_items(self):
+        """Return a `dict` wherein each item's Zotero key
         is the dictionary key. The value for each item is itself a
         dictionary with all of that item's information, organized
         under these sub-keys:
@@ -455,7 +460,7 @@ class ZotqueryBackend(PropertyBase):
 
         """
         start = time()
-        all_items = {}
+        items = {}
         # get key data for each Zotero item
         info_sql = """
             SELECT key, itemID, itemTypeID, libraryID
@@ -464,54 +469,59 @@ class ZotqueryBackend(PropertyBase):
                 itemTypeID not IN (1, 13, 14)
             ORDER BY dateAdded DESC
         """
-        basic_info = self._execute(info_sql)
-        # iterate thru every item
-        for basic in basic_info:
-            # prepare item's root dict and metadata dict
-            item_dict = OrderedDict()
-            # save item's basic ids to variables
-            item_key = item_id = item_type_id = library_id = ''
-            (item_key,
-             item_id,
-             item_type_id,
-             library_id) = basic
-            # If user only wants personal library
-            if config.PERSONAL_ONLY is True and library_id is not None:
-                continue
-            library_id = library_id if library_id is not None else '0'
-            # place key ids in item's root dict
-            item_dict['key'] = item_key
-            item_dict['library'] = library_id
-            item_dict['type'] = self._item_type_name(item_type_id)
-            # add list of dicts with each creator's info to root dict
-            item_dict['creators'] = self._item_creators(item_id)
-            # add list of dicts with item's metadata to root dict
-            item_dict['data'] = self._item_metadata(item_id)
-            # add list of dicts with item's collections to root dict
-            item_dict['zot-collections'] = self._item_collections(item_id)
-            # add list of dicts with item's tags to root dict
-            item_dict['zot-tags'] = self._item_tags(item_id)
-            # add list of dicts with item's attachments to root dict
-            item_dict['attachments'] = self._item_attachments(item_id)
-            # add list of dicts with item's notes to root dict
-            item_dict['notes'] = self._item_notes(item_id)
-            # add all data as value of `item_key`
-            all_items[item_key] = item_dict
-        self.con.close()
-        self.wf.store_data('zotquery', all_items, serializer='json')
+        with closing(sqlite3.connect(self.cloned_sqlite)) as con:
+            with con as cur:
+                # iterate thru every item
+                for row in cur.execute(info_sql):
+                    key, id_, type_id, library_id = row
+
+                    item = OrderedDict()
+                    # If user only wants personal library
+                    if config.PERSONAL_ONLY is True and library_id is not None:
+                        continue
+                    library_id = library_id if library_id is not None else '0'
+                    # place key ids in item's root dict
+                    item['key'] = key
+                    item['library'] = library_id
+                    item['type'] = self._item_type_name(type_id)
+                    # add list of dicts with each creator's info to root dict
+                    item['creators'] = self._item_creators(id_)
+                    # add list of dicts with item's metadata to root dict
+                    item['data'] = self._item_metadata(id_)
+                    # add list of dicts with item's collections to root dict
+                    item['zot-collections'] = self._item_collections(id_)
+                    # add list of dicts with item's tags to root dict
+                    item['zot-tags'] = self._item_tags(id_)
+                    # add list of dicts with item's attachments to root dict
+                    item['attachments'] = self._item_attachments(id_)
+                    # add list of dicts with item's notes to root dict
+                    item['notes'] = self._item_notes(id_)
+                    # add all data as value of `key`
+                    items[key] = item
+
+        return items
+
+    # TODO: Create a JSON db class to house all this code
+    def to_json(self):
+        """Convert Zotero's sqlite database to structured JSON.
+
+        The data are provided by :meth:`get_all_items`.
+        """
+        start = time()
+        self.wf.store_data('zotquery', self.get_all_items(), serializer='json')
         log.info('Created JSON file in {:0.3}s'.format(time() - start))
 
-    def _execute(self, sql):
-        """Execute sqlite query and return sqlite object.
+    # def _execute(self, sql):
+    #     """Execute sqlite query and return sqlite object.
 
-        :param sql: SQL or SQLITE query string
-        :type sql: :class:`unicode`
-        :returns: SQLITE object of executed query
-        :rtype: :class:`object`
+    #     :param sql: SQL or SQLITE query string
+    #     :type sql: :class:`unicode`
+    #     :returns: SQLITE object of executed query
+    #     :rtype: :class:`object`
 
-        """
-        cur = self.con.cursor()
-        return cur.execute(sql)
+    #     """
+    #     cur = self.con.cursor()
+    #     return cur.execute(sql)
 
     def _select(self, parts):
         """Prepare standard sqlite query string.
@@ -522,10 +532,11 @@ class ZotqueryBackend(PropertyBase):
         :rtype: :class:`object`
 
         """
-        (sel, src, mtch, _id) = parts
-        sql = """SELECT {sel} FROM {src} WHERE {mtch} = {id}"""
-        query = sql.format(sel=sel, src=src, mtch=mtch, id=_id)
-        return self._execute(query)
+        sel, src, mtch, _id = parts
+        sql = """SELECT {} FROM {} WHERE {} = ?"""
+        sql = sql.format(sel, src, mtch)
+        with self.con as cur:
+            return cur.execute(sql, (_id,))
 
     ### Individual Item Data --------------------------------------------------
 
@@ -538,13 +549,11 @@ class ZotqueryBackend(PropertyBase):
         :rtype: :class:`unicode`
 
         """
-        type_name = ''
-        query_parts = ('typeName',
-                       'itemTypes',
-                       'itemTypeID',
-                       item_type_id)
-        (type_name,) = self._select(query_parts).fetchone()
-        return type_name
+        sql = "SELECT typeName FROM itemTypes WHERE itemTypeID = ?"
+        with self.con as cur:
+            r = cur.execute(sql, (item_type_id,)).fetchone()
+
+        return r[0]
 
     def _item_creators(self, item_id):
         """Generate array of dicts with item's creators' information.
@@ -568,8 +577,7 @@ class ZotqueryBackend(PropertyBase):
         WHERE itemCreators.itemID = ?
         """
 
-        with self.con:
-            cur = self.con.cursor()
+        with self.con as cur:
             for row in cur.execute(sql, (item_id,)):
                 firstname, lastname, typ, order = row
                 log.debug('[%s/%s] %s %s', item_id, typ, firstname, lastname)
@@ -591,35 +599,29 @@ class ZotqueryBackend(PropertyBase):
         """
         item_meta = OrderedDict()
         # get all metadata for item
-        metadata_id_query = ('fieldID, valueID',
-                             'itemData',
-                             'itemID',
-                             item_id)
-        items_data = self._select(metadata_id_query)
-        # iterate thru metadata
-        for _item in items_data:
-            field_id = value_id = value_name = ''
-            (field_id,
-             value_id) = _item
-            # get metadata name
-            field_name_query = ('fieldName',
-                                'fields',
-                                'fieldID',
-                                field_id)
-            (field_name,) = self._select(field_name_query).fetchone()
-            # if unique metadata field
-            if field_name not in item_meta:
-                item_meta[field_name] = ''
-                # get metadata value
-                value_name_query = ('value',
-                                    'itemDataValues',
-                                    'valueID',
-                                    value_id)
-                (value_name,) = self._select(value_name_query).fetchone()
-                if field_name == 'date':
-                    item_meta[field_name] = value_name[0:4]
-                else:
-                    item_meta[field_name] = value_name
+        sql = """
+            SELECT itemData.fieldID, itemData.valueID,
+                    fields.fieldName, itemDataValues.value
+                FROM itemData
+                LEFT JOIN fields
+                    ON itemData.fieldID = fields.fieldID
+                LEFT JOIN itemDataValues
+                    ON itemData.valueID = itemDataValues.valueID
+            WHERE itemData.itemID =  ?
+        """
+        with self.con as cur:
+            # iterate thru metadata
+            for row in cur.execute(sql, (item_id,)):
+                field_id, value_id, field_name, value_name = row
+
+                if field_name not in item_meta:
+                    item_meta[field_name] = ''
+
+                    if field_name == 'date':
+                        item_meta[field_name] = value_name[0:4]
+                    else:
+                        item_meta[field_name] = value_name
+
         return item_meta
 
     def _item_collections(self, item_id):
@@ -661,27 +663,19 @@ class ZotqueryBackend(PropertyBase):
         :rtype: :class:`list`
 
         """
-        all_tags = []
-        # get all tag data for item
-        tag_id_query = ('tagID',
-                        'itemTags',
-                        'itemID',
-                        item_id)
-        tags_data = self._select(tag_id_query)
-        # iterate thru tags
-        for _tag in tags_data:
-            tag_id = ''
-            (tag_id,) = _tag
-            # get tag name
-            tag_info_query = ('name, key',
-                              'tags',
-                              'tagID',
-                              tag_id)
-            (tag_name,
-             tag_key) = self._select(tag_info_query).fetchone()
-            all_tags.append({'name': tag_name,
-                             'key': tag_key})
-        return all_tags
+        tags = []
+        sql = """
+            SELECT tags.name, tags.tagID
+                FROM itemTags
+                LEFT JOIN tags ON itemTags.tagID = tags.tagID
+            WHERE itemTags.itemID = ?
+        """
+        with self.con as cur:
+            for row in cur.execute(sql, (item_id,)):
+                name, id_ = row
+                tags.append({'name': name, 'id': id_})
+
+        return tags
 
     def _item_attachments(self, item_id):
         """Generate an array or dicts with all of the item's attachments.
