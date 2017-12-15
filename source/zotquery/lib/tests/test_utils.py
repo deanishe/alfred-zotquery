@@ -8,8 +8,7 @@
 # Created on 2017-12-15
 #
 
-"""
-"""
+"""Unit tests for utils.py"""
 
 from __future__ import print_function, absolute_import
 

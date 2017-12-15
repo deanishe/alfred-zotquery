@@ -1,7 +1,7 @@
 #!/usr/bin/python
 # encoding: utf-8
 #
-# Copyright © 2014 stephen.margheim@gmail.com
+# Copyright (c) 2014 stephen.margheim@gmail.com
 #
 # MIT Licence. See http://opensource.org/licenses/MIT
 #
@@ -18,10 +18,10 @@ from shutil import copyfile
 from collections import OrderedDict
 
 # Internal Dependencies
-import config
+from zotquery import config
 from lib import pashua, utils
 from zotero import zot
-from config import PropertyBase, stored_property
+from zotquery.config import PropertyBase, stored_property
 
 # Alfred-Workflow
 from workflow import Workflow
@@ -51,6 +51,9 @@ class ZotqueryBackend(PropertyBase):
     If file does not exist, it creates and stores dictionary.
 
     """
+
+    persistent_properties = ('zotero_app', 'csl_style', 'output_format')
+
     def __init__(self, wf):
         """Initialize class instance.
 
@@ -58,15 +61,25 @@ class ZotqueryBackend(PropertyBase):
         :type wf: :class:`object`
         """
         self.wf = wf
+
+        self._upgrade()  # remove data stored by old versions
+
+        # Paths to workflow data files
+        self._clone_path = wf.datafile('zotero.sqlite3')
+        self._json_path = wf.datafile('zotquery.json')
+        self._fts_path = wf.datafile('search.sqlite3')
+        self._fts_ascii_path = wf.datafile('search-ascii.sqlite3')
+
         # initialize :class:`LocalZotero`
         self.zotero = zot(self.wf)
         # initialize base class, for access to `properties` dict
         PropertyBase.__init__(self, self.wf, secured=False)
         self.con = None
 
+
     # Properties --------------------------------------------------------------
 
-    @stored_property
+    @property
     def cloned_sqlite(self):
         """Return path to ZotQuery's cloned sqlite database.
 
@@ -74,13 +87,13 @@ class ZotqueryBackend(PropertyBase):
         :rtype: :class:`unicode`
 
         """
-        clone_path = self.wf.datafile('zotquery.sqlite')
-        if not os.path.exists(clone_path):
-            copyfile(self.zotero.original_sqlite, clone_path)
-            log.info('Created Clone SQLITE file')
-        return clone_path
+        if not os.path.exists(self._clone_path):
+            copyfile(self.zotero.original_sqlite, self._clone_path)
+            log.info('Created clone SQLite database')
 
-    @stored_property
+        return self._clone_path
+
+    @property
     def json_data(self):
         """Return path to ZotQuery's JSON version of user's Zotero database.
 
@@ -88,14 +101,13 @@ class ZotqueryBackend(PropertyBase):
         :rtype: :class:`unicode`
 
         """
-        json_path = self.wf.datafile('zotquery.json')
-        if not os.path.exists(json_path):
+        if not os.path.exists(self._json_path):
             self.con = sqlite3.connect(self.cloned_sqlite)
             # Function to generate ZotQuery's JSON database
             self.to_json()
-        return json_path
+        return self._json_path
 
-    @stored_property
+    @property
     def fts_sqlite(self):
         """Return path to ZotQuery's Full Text Search sqlite database.
 
@@ -103,13 +115,12 @@ class ZotqueryBackend(PropertyBase):
         :rtype: :class:`unicode`
 
         """
-        fts_path = self.wf.datafile('zotquery.db')
-        if not os.path.exists(fts_path):
-            self.create_index_db(fts_path)
-            self.update_index_db(fts_path)
-        return fts_path
+        if not os.path.exists(self._fts_path):
+            self.create_index_db(self._fts_path)
+            self.update_index_db(self._fts_path)
+        return self._fts_path
 
-    @stored_property
+    @property
     def folded_sqlite(self):
         """Return path to ZotQuery's Full Text Search sqlite database
         where all text is ASCII only.
@@ -118,28 +129,24 @@ class ZotqueryBackend(PropertyBase):
         :rtype: :class:`unicode`
 
         """
-        folded_path = self.wf.datafile('folded.db')
-        if not os.path.exists(folded_path):
-            self.create_index_db(folded_path)
-            self.update_index_db(folded_path, folded=True)
-        return folded_path
+        if not os.path.exists(self._fts_ascii_path):
+            self.create_index_db(self._fts_ascii_path)
+            self.update_index_db(self._fts_ascii_path, folded=True)
+        return self._fts_ascii_path
 
     # ZotQuery Formatting Properties ------------------------------------------
 
     @stored_property
     def zotero_app(self):
-        return self.check_storage('app',
-                                  self.formatting_properties_setter)
+        return self.check_storage('app', self.formatting_properties_setter)
 
     @stored_property
     def csl_style(self):
-        return self.check_storage('csl',
-                                  self.formatting_properties_setter)
+        return self.check_storage('csl', self.formatting_properties_setter)
 
     @stored_property
     def output_format(self):
-        return self.check_storage('fmt',
-                                  self.formatting_properties_setter)
+        return self.check_storage('fmt', self.formatting_properties_setter)
 
     def formatting_properties_setter(self):
         """Configure ZotQuery formatting perferences."""
@@ -198,36 +205,41 @@ class ZotqueryBackend(PropertyBase):
         :rtype: :class:`tuple`
 
         """
-        (update, spot) = (False, None)
-        zotero_mod = os.stat(self.zotero.original_sqlite)[8]
-        clone_mod = os.stat(self.cloned_sqlite)[8]
-        cache_mod = os.stat(self.json_data)[8]
+        update, spot = False, None
+        zotero_mod = os.stat(self.zotero.original_sqlite).st_mtime
+        clone_mod = os.stat(self.cloned_sqlite).st_mtime
+        cache_mod = os.stat(self.json_data).st_mtime
+
         # Check if cloned sqlite database is up-to-date with `zotero` database
         if zotero_mod > clone_mod:
-            update, spot = (True, "Clone")
+            update, spot = True, "Clone"
+
         # Check if JSON cache is up-to-date with the cloned database
         elif (cache_mod - clone_mod) > 10:
-            update, spot = (True, "JSON")
+            update, spot = True, "JSON"
+
         if update:
-            log.debug('Update {}? {}'.format(spot, update))
-        return (update, spot)
+            log.debug('Update %s? %s', spot, update)
+
+        return update, spot
 
     def update_clone(self):
         """Update `cloned_sqlite` so that it's current with `original_sqlite`.
 
         """
-        clone_path = self.wf.datafile('zotquery.sqlite')
-        copyfile(self.zotero.original_sqlite, clone_path)
-        log.info('Updated Clone SQLITE file')
+        copyfile(self.zotero.original_sqlite, self._clone_path)
+        log.info('Updated clone SQLite file')
 
     def update_json(self):
         """Update `json_data` so that it's current with `cloned_sqlite`.
 
         """
         self.con = sqlite3.connect(self.cloned_sqlite)
+
         # backup previous version of library
         if os.path.exists(self.json_data):
             copyfile(self.json_data, self.wf.datafile('backup.json'))
+
         # update library
         self.to_json()
         log.info('Updated and backed-up JSON file')
@@ -273,46 +285,46 @@ class ZotqueryBackend(PropertyBase):
         with con:
             cur = con.cursor()
             # iterate over every item in library
-            for row in self.generate_data():
+            for d in self.generate_data():
                 # names of all keys for item (cf. `FILTERS['general']`)
-                columns = ', '.join([x.keys()[0]
-                                     for x in row])
-                values = ['"' + re.sub(r'"|\'', '', x.values()[0]) + '"'
-                          for x in row]
-                values = ', '.join(values)
+                columns = ', '.join(d.keys())
+                values = d.values()
+                # values = ', '.join(values)
                 # fold to ASCII-only?
                 if folded:
-                    values = fold(values)
+                    values = [fold(s) for s in values]
                 sql = """INSERT OR IGNORE INTO zotquery
                          ({columns}) VALUES ({data})
-                        """.format(columns=columns, data=values)
-                cur.execute(sql)
+                        """.format(columns=columns,
+                                   data=','.join(['?'] * len(values)))
+                cur.execute(sql, values)
                 count += 1
-        log.debug('Added/Updated {} items in {:0.3}s'.format(count,
-                                                             time() - start))
+        log.debug('Added/Updated %d items in %0.3fs', count, time() - start)
 
     def generate_data(self):
         """Create a genererator with dictionaries for each item
         in ``json_data``.
 
-        :returns: ``list`` of ``dicts`` with all item's data as ``strings``
+        :yields: ``dict`` with all item's data as ``strings``
         :rtype: :class:`genererator`
 
         """
         json_data = utils.read_json(self.json_data)
         # for each `item`, get its data in dict format
         for item in json_data.itervalues():
-            array = list()
+            array = []
             # get search columns from scope
             columns = config.FILTERS.get('general', None)
             if columns:
+                data = OrderedDict()
                 for column in columns:
                     # get search map from column
                     json_map = config.FILTERS_MAP.get(column, None)
                     if json_map:
                         # get data from `item` using search map
-                        array.append({column: self.get_datum(item, json_map)})
-            yield array
+                        data[column] = self.get_datum(item, json_map)
+                        # array.append((column, ))
+                yield data
 
     @staticmethod
     def get_datum(item, val_map):
@@ -560,7 +572,7 @@ class ZotqueryBackend(PropertyBase):
             cur = self.con.cursor()
             for row in cur.execute(sql, (item_id,)):
                 firstname, lastname, typ, order = row
-                log.debug('[%s/%s] %s, %s', item_id, typ, firstname, lastname)
+                log.debug('[%s/%s] %s %s', item_id, typ, firstname, lastname)
                 creators.append({'family': lastname,
                                  'given': firstname,
                                  'type': typ,
@@ -718,7 +730,7 @@ class ZotqueryBackend(PropertyBase):
         :rtype: :class:`list`
 
         """
-        from zotquery.util import HTMLText
+        from lib.utils import HTMLText
         notes = []
         sql = """SELECT note FROM itemNotes WHERE parentItemID = ?"""
         with self.con:
@@ -729,6 +741,24 @@ class ZotqueryBackend(PropertyBase):
                 notes.append(note)
 
         return notes
+
+    def _upgrade(self):
+        """Remove old databases and force rebuild."""
+        sentinel = '_upgrade_1'
+        senpath = self.wf.datafile(sentinel)
+
+        if not os.path.exists(senpath):
+            log.info('removing old data for upgrade ...')
+            for fn in os.listdir(self.wf.datadir):
+                if fn == sentinel:
+                    continue
+
+                p = self.wf.datafile(fn)
+                log.debug('removing %s ...', p)
+                os.unlink(p)
+
+            with open(senpath, 'wb') as fp:
+                fp.write('')
 
 #-----------------------------------------------------------------------------
 # Alias

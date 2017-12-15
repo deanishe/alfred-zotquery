@@ -1,7 +1,7 @@
 #!/usr/bin/python
 # encoding: utf-8
 #
-# Copyright © 2014 stephen.margheim@gmail.com
+# Copyright (c) 2014 stephen.margheim@gmail.com
 #
 # MIT Licence. See http://opensource.org/licenses/MIT
 #
@@ -43,6 +43,10 @@ class LocalZotero(PropertyBase):
     If file does not exist, it creates and stores dictionary.
 
     """
+
+    persistent_properties = ('original_sqlite', 'internal_storage',
+                             'external_storage')
+
     def __init__(self, wf):
         """Initialize the sub-class instance.
 
@@ -154,6 +158,9 @@ class WebZotero(PropertyBase):
     """Read access to the Zotero web API (v.3)
 
     """
+
+    persistent_properties = ('user_id', 'api_key', 'user_type')
+
     def __init__(self, wf):
         """Store Zotero credentials."""
         self.wf = wf

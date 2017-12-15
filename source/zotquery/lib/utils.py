@@ -1,7 +1,7 @@
 #!/usr/bin/python
 # encoding: utf-8
 #
-# Copyright © 2014 stephen.margheim@gmail.com
+# Copyright (c) 2014 stephen.margheim@gmail.com
 #
 # MIT Licence. See http://opensource.org/licenses/MIT
 #
@@ -9,14 +9,56 @@
 #
 from __future__ import unicode_literals
 
-# Standard Library
-import subprocess
-import traceback
 import codecs
+from HTMLParser import HTMLParser
 import json
-import sys
 import os
 import re
+import subprocess
+import sys
+import traceback
+
+
+class HTMLText(HTMLParser):
+    """Extract text from HTML.
+
+    Strips all tags from HTML.
+
+    Attributes:
+        data (list): Accumlated text content.
+
+    """
+
+    @classmethod
+    def strip(cls, html):
+        """Extract text from HTML.
+
+        Args:
+            html (unicode): HTML to process.
+            decode (bool, optional): Decode from UTF-8 to Unicode.
+
+        Returns:
+            basestring: `str` or `unicode` text content of HTML.
+        """
+        p = cls()
+        p.feed(html)
+        return unicode(p)
+
+    def __init__(self):
+        self.reset()
+        self.data = []
+
+    def handle_data(self, s):
+        if not isinstance(s, unicode):
+            s = unicode(s, 'utf-8', 'replace')
+
+        self.data.append(s)
+
+    def __str__(self):
+        return unicode(self).encode('utf-8', 'replace')
+
+    def __unicode__(self):
+        return u''.join(self.data)
 
 
 def full_stack():
@@ -140,7 +182,7 @@ def run_filter(trigger, arg):
     """Run Alfred filter."""
     trigger = applescriptify(trigger)
     arg = applescriptify(arg)
-    scpt = """tell application "Alfred 2" \
+    scpt = """tell application "Alfred 3" \
             to run trigger "{}" \
             in workflow "com.hackademic.zotquery" \
             with argument "{}"
@@ -150,7 +192,7 @@ def run_filter(trigger, arg):
 
 def run_alfred(query):
     """Run Alfred with `query` via AppleScript."""
-    alfred_scpt = 'tell application "Alfred 2" to search "{}"'
+    alfred_scpt = 'tell application "Alfred 3" to search "{}"'
     script = alfred_scpt.format(applescriptify(query))
     return subprocess.call(['osascript', '-e', script])
 

@@ -1,7 +1,7 @@
 #!/usr/bin/python
 # encoding: utf-8
 #
-# Copyright © 2014 stephen.margheim@gmail.com
+# Copyright (c) 2014 stephen.margheim@gmail.com
 #
 # MIT Licence. See http://opensource.org/licenses/MIT
 #
@@ -192,12 +192,16 @@ PASHUA = os.path.join(WF.workflowfile('zotquery/lib/Pashua.app'),
 
 
 class PropertyBase(object):
+
+    # Properties that will be persisted to disk/Keychain
+    persistent_properties = ()
+
     def __init__(self, wf, secured=False):
         self.wf = wf
         # store properties dict in Keychain (True) or to file (False)
         self.secured = secured
          # get name of class in underscore format
-        self.class_name = utils.convert(self.__class__.__name__)
+        self.filename = utils.convert(self.__class__.__name__)
         # ensure all sub-class properties are written to disk
         self.properties = self._properties(secured)
 
@@ -213,11 +217,11 @@ class PropertyBase(object):
         """
         def getter():
             # look for file in workflow's storage dir
-            return self.wf.stored_data(self.class_name)
+            return self.wf.stored_data(self.filename)
 
         def setter(properties):
             # save that dictionary to disk in JSON format
-            self.wf.store_data(self.class_name, properties,
+            self.wf.store_data(self.filename, properties,
                                serializer='json')
             return True
 
@@ -226,7 +230,7 @@ class PropertyBase(object):
     def secure(self):
         """Just like `unsecure()`, but uses the Keychain."""
         def getter():
-            pw = self.check_password(self.class_name)
+            pw = self.check_password(self.filename)
             try:
                 return json.loads(pw)
             except TypeError:
@@ -235,8 +239,7 @@ class PropertyBase(object):
                 return pw
 
         def setter(properties):
-            json_str = json.dumps(properties)
-            self.wf.save_password(self.class_name, json_str)
+            self.wf.save_password(self.filename, json.dumps(properties))
 
         return self.get_properties(getter, setter)
 
@@ -256,10 +259,10 @@ class PropertyBase(object):
         properties = getter()
         if not properties:
             # get names of all properties of this class
-            prop_names = [k for (k, v) in self.__class__.__dict__.items()
-                          if isinstance(v, property)]
+            # prop_names = [k for (k, v) in self.__class__.__dict__.items()
+            #               if isinstance(v, property)]
             properties = dict()
-            for prop in prop_names:
+            for prop in self.persistent_properties:
                 # generate dictionary of property names and values
                 properties[prop] = getattr(self, prop)
         # if any property has a null value

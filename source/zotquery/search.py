@@ -252,20 +252,21 @@ class ResultsFormatter(object):
 def search_for_items(scope, query):
     # Generate appropriate sqlite query
     sqlite_query = make_item_sqlite_query(scope, query)
-    config.log.info('Item sqlite query : {}'.format(sqlite_query))
+    config.log.info('Item sqlite query : %s', sqlite_query)
     # Run sqlite query and get back item keys
     item_keys = run_item_sqlite_query(sqlite_query)
     # Get JSON data of user's Zotero library
     data = utils.read_json(zq.backend.json_data)
-    results_dict = []
+
+    results = []
     for key in item_keys:
         item = data.get(key, None)
         if item:
             # Prepare dictionary for Alfred
             formatter = ResultsFormatter(item)
-            alfred_dict = formatter.prepare_item_feedback()
-            results_dict.append(alfred_dict)
-    return results_dict
+            results.append(formatter.prepare_item_feedback())
+
+    return results
 
 
 ## 1.1  -----------------------------------------------------------------------
@@ -284,12 +285,9 @@ def make_item_fuzzy(query):
 ### 1.1.2  --------------------------------------------------------------------
 def get_item_columns(scope):
     if scope in config.FILTERS.keys():
-        columns = config.FILTERS.get(scope)
-        columns.remove('key')
-        return columns
+        return [s for s in config.FILTERS.get(scope, []) if s != 'key']
     else:
-        msg = 'Invalid search scope : `{}`'.format(scope)
-        raise Exception(msg)
+        raise ValueError('Invalid search scope : `{}`'.format(scope))
 
 
 ### 1.1.3  --------------------------------------------------------------------
@@ -314,16 +312,14 @@ def get_item_sql():
 ## 1.2  -----------------------------------------------------------------------
 def run_item_sqlite_query(query):
     db = get_fts_db(query)
-    config.log.info('Connecting to : `{}`'.format(db.split('/')[-1]))
+    config.log.info('Connecting to : `%s`', db.split('/')[-1])
 
     def ranker(con):
         ranks = [1.0] * len(config.FILTERS['general'])
-        con.create_function('rank',
-                            1,
-                            zq.backend.make_rank_func(ranks))
+        con.create_function('rank', 1, zq.backend.make_rank_func(ranks))
 
     results = execute_sql(db, query, context=ranker).fetchall()
-    config.log.info('Number of results : {}'.format(len(results)))
+    config.log.info('Number of results : %d', len(results))
     # Omit rankings from the returned list
     return [x[0] for x in results]
 
@@ -338,9 +334,8 @@ def get_fts_db(query):
 
 
 ## 1.3  -----------------------------------------------------------------------
-def get_item_dict(key):
-    
-    item = data.get(key, None)
+# def get_item_dict(key):
+#     item = data.get(key, None)
 
 
 #------------------------------------------------------------------------------

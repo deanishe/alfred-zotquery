@@ -1582,7 +1582,7 @@
 	<key>createdby</key>
 	<string></string>
 	<key>description</key>
-	<string>Search your Zotero Library (v. 10.0)</string>
+	<string>Search your Zotero Library</string>
 	<key>disabled</key>
 	<false/>
 	<key>name</key>
@@ -4871,6 +4871,8 @@
 			<integer>4080</integer>
 		</dict>
 	</dict>
+	<key>version</key>
+	<string>11</string>
 	<key>webaddress</key>
 	<string></string>
 </dict>

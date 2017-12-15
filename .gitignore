@@ -15,3 +15,6 @@ testing_env/cache_dir/0_MBXHR545.cpickle
 # Sublime Text project files
 *.sublime-project
 *.sublime-workflow
+
+# pytest turds
+.cache/
