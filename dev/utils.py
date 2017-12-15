@@ -1,7 +1,7 @@
 #!/usr/bin/python
 # encoding: utf-8
 #
-# Copyright © 2014 stephen.margheim@gmail.com
+# Copyright (c) 2014 stephen.margheim@gmail.com
 #
 # MIT Licence. See http://opensource.org/licenses/MIT
 #
