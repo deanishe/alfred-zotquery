@@ -208,8 +208,8 @@ class ResultsFormatter(object):
         """Properly format the creator information for ``item``.
 
         """
-        creators_num = len(self.item['creators'])
-        creator_list = []
+        n = len(self.item['creators'])
+        creators = []
         # Order last names by index
         for author in self.item['creators']:
             last = author['family']
@@ -218,20 +218,23 @@ class ResultsFormatter(object):
                 last = last + ' (ed.)'
             elif author['type'] == 'translator':
                 last = last + ' (trans.)'
-            creator_list.insert(index, last)
+            creators.insert(index, last)
+
         # Format last names into string
-        if creators_num == 0:
+        if n == 0:
             creator_ref = 'xxx.'
-        elif creators_num == 1:
-            creator_ref = ''.join(creator_list)
-        elif creators_num == 2:
-            creator_ref = ' and '.join(creator_list)
-        elif creators_num > 2:
-            creator_ref = ', '.join(creator_list[:-1])
-            creator_ref = creator_ref + ', and ' + creator_list[-1]
+        elif n == 1:
+            creator_ref = ''.join(creators)
+        elif n == 2:
+            creator_ref = ' and '.join(creators)
+        else:
+            creator_ref = ', '.join(creators[:-1])
+            creator_ref = '{}, and {}'.format(creator_ref, creators[-1])
+
         # Format final period (`.`)
-        if not creator_ref[-1] in ('.', '!', '?'):
+        if creator_ref and creator_ref[-1] not in ('.', '!', '?'):
             creator_ref = creator_ref + '.'
+
         return creator_ref
 
     def format_date(self):
