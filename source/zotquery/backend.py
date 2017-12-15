@@ -718,18 +718,15 @@ class ZotqueryBackend(PropertyBase):
         :rtype: :class:`list`
 
         """
+        from zotquery.util import HTMLText
         notes = []
         sql = """SELECT note FROM itemNotes WHERE parentItemID = ?"""
         with self.con:
             cur = self.con.cursor()
             for row in cur.execute(sql, (item_id,)):
-                note = row[0]
+                note = HTMLText.strip(row[0])
                 log.debug('[%s/note] %s', item_id, note)
                 notes.append(note)
-
-        # TODO: Strip HTML
-        # Original code:
-        # note = note[33:-10]
 
         return notes
 
